@@ -1,5 +1,5 @@
 """
-Ensemble inference with TTA for WRN + PyramidNet + DHVT on CIFAR-100.
+Ensemble inference with TTA for WRN + DHVT on CIFAR-100.
 
 TTA augmentations:
   - original
@@ -7,13 +7,11 @@ TTA augmentations:
   - 4-corner crops (with padding)
 
 Ensemble strategy: weighted probability averaging across models & TTA variants.
-By default this runs the best 3-way AVG/SUM setting found by ensemble sweep.
 
 Usage:
   python inference.py \
     --wrn-checkpoint best_wrn_28_10.pth \
     --dhvt-checkpoint best_dhvt_tiny.pth \
-    --pyramidnet-checkpoint best_seed42.pth \
     --data-path ./data/cifar-100-python
 """
 import argparse
@@ -32,7 +30,6 @@ def _load_ckpt(path, map_location='cpu'):
 from torchvision import datasets, transforms
 
 from models.wideresnet import wrn_28_10
-from models.pyramidnet import pyramidnet272
 from models.dhvt import dhvt_tiny_cifar_patch4, dhvt_small_cifar_patch4
 from datasets import (
     CIFAR100_MEAN, CIFAR100_STD,
@@ -190,16 +187,14 @@ def print_results(label, acc1, acc5, sc_density):
 
 MODEL_REGISTRY = {
     'wrn_28_10': wrn_28_10,
-    'pyramidnet272': pyramidnet272,
     'dhvt_tiny_cifar_patch4': dhvt_tiny_cifar_patch4,
     'dhvt_small_cifar_patch4': dhvt_small_cifar_patch4,
 }
 
 
-def load_model(model_name, checkpoint_path, device, num_classes=100,
-               num_superclasses=20, prefer_ema=False):
+def load_model(model_name, checkpoint_path, device, num_classes=100, num_superclasses=20):
     """Load a model from checkpoint."""
-    if model_name.startswith('wrn') or model_name.startswith('pyramidnet'):
+    if model_name.startswith('wrn'):
         model = MODEL_REGISTRY[model_name](num_classes=num_classes)
     else:
         model = MODEL_REGISTRY[model_name](
@@ -210,27 +205,14 @@ def load_model(model_name, checkpoint_path, device, num_classes=100,
 
     # Handle different checkpoint formats
     if isinstance(ckpt, dict):
-        keys = ['model_state_dict', 'state_dict', 'model', 'model_state', 'best_state']
-        if prefer_ema:
-            keys.insert(0, 'model_ema')
-        for key in keys:
+        for key in ('model_state_dict', 'state_dict', 'model'):
             if key in ckpt and isinstance(ckpt[key], dict):
                 state_dict = ckpt[key]
-                loaded_key = key
                 break
         else:
             state_dict = ckpt
-            loaded_key = 'checkpoint'
     else:
         state_dict = ckpt
-        loaded_key = 'raw checkpoint'
-
-    if any(k.startswith('module.') for k in state_dict.keys()):
-        state_dict = {
-            k[len('module.'):] if k.startswith('module.') else k: v
-            for k, v in state_dict.items()
-        }
-
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing:
         print(f"  Warning: missing keys: {missing}")
@@ -238,8 +220,7 @@ def load_model(model_name, checkpoint_path, device, num_classes=100,
         print(f"  Warning: unexpected keys: {unexpected}")
 
     epoch = ckpt.get('epoch', '?') if isinstance(ckpt, dict) else '?'
-    print(f"  Loaded {model_name} from {checkpoint_path} "
-          f"(epoch {epoch}, weights={loaded_key})")
+    print(f"  Loaded {model_name} from {checkpoint_path} (epoch {epoch})")
     model.eval()
     return model
 
@@ -249,19 +230,11 @@ def load_model(model_name, checkpoint_path, device, num_classes=100,
 # ---------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Ensemble + TTA inference for CIFAR-100",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    )
+    parser = argparse.ArgumentParser(description="Ensemble + TTA inference for CIFAR-100")
     parser.add_argument('--wrn-checkpoint', type=str, default='../WRN/checkpoints/best_wrn_28_10.pth',
                         help='Path to WRN checkpoint (.pth or .safetensors)')
     parser.add_argument('--wrn-model', type=str, default='wrn_28_10',
                         choices=['wrn_28_10'])
-    parser.add_argument('--pyramidnet-checkpoint', type=str,
-                        default='../Pyramidnet272/checkpoints/best_seed42.pth',
-                        help='Path to PyramidNet checkpoint (.pth or .safetensors)')
-    parser.add_argument('--pyramidnet-model', type=str, default='pyramidnet272',
-                        choices=['pyramidnet272'])
     parser.add_argument('--dhvt-checkpoint', type=str,
                         default='../DHVT/output/best.pth',
                         help='Path to DHVT checkpoint (.pth or .safetensors)')
@@ -272,17 +245,12 @@ def main():
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--num-superclasses', type=int, default=20)
-    parser.add_argument('--wrn-weight', type=float, default=0.760,
-                        help='Weight for WRN in ensemble')
-    parser.add_argument('--pyramidnet-weight', type=float, default=0.155,
-                        help='Weight for PyramidNet in 3-way ensemble. '
-                             'DHVT weight = 1 - wrn_weight - pyramidnet_weight')
+    parser.add_argument('--wrn-weight', type=float, default=0.85,
+                        help='Weight for WRN in ensemble (DHVT gets 1 - this)')
     parser.add_argument('--fusion-beta', type=float, default=1.0,
                         help='Hierarchical score fusion weight for DHVT aux head. '
                              '0=disabled. Recommended: 0.3 (balanced) ~ 1.0 (SC_Density focus). '
                              'score(c) = log p_fine(c) + beta * log p_coarse(sc(c))')
-    parser.add_argument('--use-dhvt-ema', action='store_true',
-                        help='Load DHVT model_ema weights when present in the checkpoint')
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -321,28 +289,6 @@ def main():
         model_probs['wrn'] = wrn_probs_tta
         del wrn
 
-    # --- PyramidNet ---
-    if args.pyramidnet_checkpoint:
-        print(f"\n=== PyramidNet ({args.pyramidnet_model}) ===")
-        pyramid = load_model(args.pyramidnet_model, args.pyramidnet_checkpoint, device)
-
-        # No TTA
-        no_tta_loader = torch.utils.data.DataLoader(
-            test_ds, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
-        pyramid_logits = collect_logits(pyramid, no_tta_loader, device)
-        pyramid_probs_no_tta = F.softmax(pyramid_logits, dim=1)
-        acc1, acc5, sc = compute_metrics(pyramid_probs_no_tta, targets, fine_to_coarse_t)
-        print_results("PyramidNet - No TTA", acc1, acc5, sc)
-
-        # TTA
-        print("  Running TTA...")
-        pyramid_probs_tta = collect_tta_probs(pyramid, args.data_path, device,
-                                              args.input_size, args.batch_size)
-        acc1, acc5, sc = compute_metrics(pyramid_probs_tta, targets, fine_to_coarse_t)
-        print_results("PyramidNet - TTA", acc1, acc5, sc)
-        model_probs['pyramidnet'] = pyramid_probs_tta
-        del pyramid
-
     # --- DHVT ---
     if args.dhvt_checkpoint:
         has_aux = args.num_superclasses > 0
@@ -351,8 +297,7 @@ def main():
         if use_fusion:
             print(f"  Hierarchical score fusion: beta={args.fusion_beta}")
         dhvt = load_model(args.dhvt_model, args.dhvt_checkpoint, device,
-                          num_superclasses=args.num_superclasses,
-                          prefer_ema=args.use_dhvt_ema)
+                          num_superclasses=args.num_superclasses)
 
         # No TTA
         no_tta_loader = torch.utils.data.DataLoader(
@@ -388,46 +333,18 @@ def main():
         del dhvt
 
     # --- Ensemble ---
-    if len(model_probs) == 3:
-        w_wrn = args.wrn_weight
-        w_pyr = args.pyramidnet_weight
-        w_dhvt = 1.0 - w_wrn - w_pyr
-        if (
-            w_wrn < 0
-            or w_pyr < 0
-            or w_dhvt < 0
-            or abs(w_wrn + w_pyr + w_dhvt - 1.0) > 1e-6
-        ):
-            raise ValueError(
-                f"Invalid weights: WRN={w_wrn}, PyramidNet={w_pyr}, DHVT={w_dhvt}. "
-                f"Must be non-negative and sum to 1.")
-        ensemble_probs = (
-            w_wrn * model_probs['wrn']
-            + w_pyr * model_probs['pyramidnet']
-            + w_dhvt * model_probs['dhvt']
-        )
-        acc1, acc5, sc = compute_metrics(ensemble_probs, targets, fine_to_coarse_t)
-        print(f"\n{'='*50}")
-        print_results(
-            f"Ensemble 3-way (WRN={w_wrn:.2f}, PyramidNet={w_pyr:.2f}, DHVT={w_dhvt:.2f}) + TTA",
-            acc1, acc5, sc)
-        print(f"{'='*50}")
-    elif len(model_probs) == 2 and 'wrn' in model_probs and 'dhvt' in model_probs:
+    if len(model_probs) == 2:
         w = args.wrn_weight
         ensemble_probs = w * model_probs['wrn'] + (1 - w) * model_probs['dhvt']
         acc1, acc5, sc = compute_metrics(ensemble_probs, targets, fine_to_coarse_t)
         print(f"\n{'='*50}")
-        print_results(f"Ensemble (WRN={w:.2f}, DHVT={1-w:.2f}) + TTA", acc1, acc5, sc)
+        print_results(f"Ensemble (WRN={w:.1f}, DHVT={1-w:.1f}) + TTA", acc1, acc5, sc)
         print(f"{'='*50}")
     elif len(model_probs) == 1:
         name = list(model_probs.keys())[0]
         print(f"\n  (Only one model provided — skipping ensemble, showing {name} + TTA above)")
-    elif len(model_probs) > 1:
-        names = ', '.join(model_probs.keys())
-        print(f"\n  (No configured ensemble for provided models: {names})")
     else:
-        print("\n  No checkpoints provided. Use --wrn-checkpoint, "
-              "--pyramidnet-checkpoint, and/or --dhvt-checkpoint.")
+        print("\n  No checkpoints provided. Use --wrn-checkpoint and/or --dhvt-checkpoint.")
 
     torch.cuda.empty_cache()
 

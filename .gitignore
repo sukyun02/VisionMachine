@@ -162,8 +162,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.codex
-*.pdf
 
 # Spyder project settings
 .spyderproject
@@ -220,13 +218,3 @@ events.out.tfevents*
 
 # vim
 .vim
-
-# Pyramidnet272 local artifacts (큰 파일/환경)
-Pyramidnet272/venv/                                                                                                                                                                                           
-Pyramidnet272/checkpoints/                                                                                                                                                                                    
-Pyramidnet272/data/                                                                                                                                                                                           
-Pyramidnet272/logs/                                                                                                                                                                                           
-Pyramidnet272/__pycache__/
-Pyramidnet272/.ipynb_checkpoints/                                                                                                                                                                             
-Pyramidnet272/**/__pycache__/
-/ensemble.py 
