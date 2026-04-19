@@ -9,6 +9,15 @@ Pipeline:
 import argparse
 import torch
 import torch.nn.functional as F
+
+
+def _load_ckpt(path, map_location='cpu'):
+    """확장자에 따라 .pth 또는 .safetensors 체크포인트를 로드한다."""
+    if str(path).endswith('.safetensors'):
+        from safetensors.torch import load_file
+        device = str(map_location) if map_location else 'cpu'
+        return load_file(str(path), device=device)
+    return torch.load(str(path), map_location=map_location, weights_only=False)
 from torchvision import datasets, transforms
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.models import create_model
@@ -102,10 +111,12 @@ def main():
         img_size=(args.input_size, args.input_size),
         num_superclasses=args.num_superclasses,
     ).to(device)
-    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt['model'], strict=False)
+    ckpt = _load_ckpt(args.checkpoint, map_location=device)
+    state_dict = ckpt['model'] if isinstance(ckpt.get('model'), dict) else ckpt
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
-    print(f"Loaded epoch {ckpt.get('epoch', '?')}")
+    epoch = ckpt.get('epoch', '?') if not str(args.checkpoint).endswith('.safetensors') else '?'
+    print(f"Loaded epoch {epoch}")
 
     tta_transforms = get_tta_transforms(args.input_size)
     print(f"TTA augmentations: {[name for name, _ in tta_transforms]}")

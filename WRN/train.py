@@ -17,6 +17,15 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchvision
 import torchvision.transforms as T
+
+
+def _load_ckpt(path, map_location='cpu'):
+    """확장자에 따라 .pth 또는 .safetensors 체크포인트를 로드한다."""
+    if str(path).endswith('.safetensors'):
+        from safetensors.torch import load_file
+        device = str(map_location) if map_location else 'cpu'
+        return load_file(str(path), device=device)
+    return torch.load(str(path), map_location=map_location, weights_only=False)
 from tqdm import tqdm
 
 try:
@@ -364,21 +373,27 @@ def main():
 
     ckpt_path = os.path.join(args.save_dir, 'WRN-28-10_fine0.6.pth')
     if args.resume and os.path.exists(ckpt_path):
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt['model_state_dict'])
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        scheduler.load_state_dict(ckpt['scheduler_state_dict'])
-        scaler.load_state_dict(ckpt['scaler_state_dict'])
-        best_acc       = ckpt['best_acc']
-        best_super_acc = ckpt.get('best_super_acc', 0.)
-        best_top1_acc = best_acc
-        history     = ckpt['history']
-        # 구 체크포인트 호환: 없는 키 채우기
-        for key in ['train_acc', 'val_super_acc']:
-            if key not in history:
-                history[key] = [0.0] * len(history['train_loss'])
-        start_epoch = ckpt['epoch'] + 1
-        print(f'체크포인트 로드! Epoch {start_epoch}부터 재시작 | Best: {best_acc*100:.2f}%')
+        ckpt = _load_ckpt(ckpt_path, map_location=device)
+        is_safetensors = str(ckpt_path).endswith('.safetensors')
+        if is_safetensors:
+            # safetensors는 모델 가중치만 저장 — 학습 상태(optimizer 등)는 초기화됨
+            model.load_state_dict(ckpt)
+            print('safetensors 체크포인트 로드 (model 가중치만 복원, 학습 상태는 초기화됨)')
+        else:
+            model.load_state_dict(ckpt['model_state_dict'])
+            optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+            scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+            scaler.load_state_dict(ckpt['scaler_state_dict'])
+            best_acc       = ckpt['best_acc']
+            best_super_acc = ckpt.get('best_super_acc', 0.)
+            best_top1_acc = best_acc
+            history     = ckpt['history']
+            # 구 체크포인트 호환: 없는 키 채우기
+            for key in ['train_acc', 'val_super_acc']:
+                if key not in history:
+                    history[key] = [0.0] * len(history['train_loss'])
+            start_epoch = ckpt['epoch'] + 1
+            print(f'체크포인트 로드! Epoch {start_epoch}부터 재시작 | Best: {best_acc*100:.2f}%')
 
     print(f"\n{'Ep':>4} | {'Train Loss':>10} | {'Val Loss':>8} | {'Top-1':>7} | {'Super':>7} | {'LR':>8} | Time")
     print("-" * 72)

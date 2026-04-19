@@ -35,6 +35,22 @@ import warnings
 warnings.filterwarnings('ignore', 'Argument interpolation should be of type InterpolationMode instead of int')
 
 
+def _load_ckpt(path, map_location='cpu'):
+    """확장자에 따라 .pth 또는 .safetensors 체크포인트를 로드한다."""
+    if str(path).endswith('.safetensors'):
+        from safetensors.torch import load_file
+        device = str(map_location) if map_location else 'cpu'
+        return load_file(str(path), device=device)
+    return torch.load(str(path), map_location=map_location, weights_only=False)
+
+
+def _extract_model_state(ckpt):
+    """체크포인트 dict에서 모델 state_dict를 추출한다 (safetensors 플랫 포맷도 처리)."""
+    if isinstance(ckpt, dict) and 'model' in ckpt and isinstance(ckpt['model'], dict):
+        return ckpt['model']
+    return ckpt
+
+
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
     parser.add_argument('--batch-size', default=64, type=int)
@@ -294,9 +310,9 @@ def main(args):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.finetune, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.finetune, map_location='cpu')
+            checkpoint = _load_ckpt(args.finetune, map_location='cpu')
 
-        checkpoint_model = checkpoint['model']
+        checkpoint_model = _extract_model_state(checkpoint)
         state_dict = model.state_dict()
         for k in ['head.weight', 'head.bias', 'head_dist.weight', 'head_dist.bias','patch_embed.proj.weight','patch_embed.proj.bias']:
             if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
@@ -406,8 +422,8 @@ def main(args):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.teacher_path, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.teacher_path, map_location='cpu')
-        teacher_model.load_state_dict(checkpoint['model'])
+            checkpoint = _load_ckpt(args.teacher_path, map_location='cpu')
+        teacher_model.load_state_dict(_extract_model_state(checkpoint))
         teacher_model.to(device)
         teacher_model.eval()
 
@@ -430,13 +446,13 @@ def main(args):
             checkpoint = torch.hub.load_state_dict_from_url(
                 args.resume, map_location='cpu', check_hash=True)
         else:
-            checkpoint = torch.load(args.resume, map_location='cpu')
-        missing, unexpected = model_without_ddp.load_state_dict(checkpoint['model'], strict=False)
+            checkpoint = _load_ckpt(args.resume, map_location='cpu')
+        missing, unexpected = model_without_ddp.load_state_dict(_extract_model_state(checkpoint), strict=False)
         if missing:
             print(f"Warning: Missing keys in checkpoint (new layers will be randomly initialized): {missing}")
         if unexpected:
             print(f"Warning: Unexpected keys in checkpoint (ignored): {unexpected}")
-        if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
+        if not args.eval and isinstance(checkpoint, dict) and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])
             lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
             args.start_epoch = checkpoint['epoch'] + 1

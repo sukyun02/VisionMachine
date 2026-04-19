@@ -18,6 +18,15 @@ import argparse
 
 import torch
 import torch.nn.functional as F
+
+
+def _load_ckpt(path, map_location='cpu'):
+    """확장자에 따라 .pth 또는 .safetensors 체크포인트를 로드한다."""
+    if str(path).endswith('.safetensors'):
+        from safetensors.torch import load_file
+        device = str(map_location) if map_location else 'cpu'
+        return load_file(str(path), device=device)
+    return torch.load(str(path), map_location=map_location, weights_only=False)
 from torchvision import datasets, transforms
 
 from models.wideresnet import wrn_28_10
@@ -186,7 +195,7 @@ def load_model(model_name, checkpoint_path, device, num_classes=100, num_supercl
             num_classes=num_classes, num_superclasses=num_superclasses)
 
     model = model.to(device)
-    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    ckpt = _load_ckpt(checkpoint_path, map_location=device)
 
     # Handle different checkpoint formats
     if isinstance(ckpt, dict):
@@ -217,11 +226,11 @@ def load_model(model_name, checkpoint_path, device, num_classes=100, num_supercl
 def main():
     parser = argparse.ArgumentParser(description="Ensemble + TTA inference for CIFAR-100")
     parser.add_argument('--wrn-checkpoint', type=str, default='../WRN/checkpoints/best_wrn_28_10.pth',
-                        help='Path to WRN checkpoint (.pth)')
+                        help='Path to WRN checkpoint (.pth or .safetensors)')
     parser.add_argument('--wrn-model', type=str, default='wrn_28_10',
                         choices=['wrn_28_10'])
     parser.add_argument('--dhvt-checkpoint', type=str, default='../DHVT/output/best.pth',
-                        help='Path to DHVT checkpoint (.pth)')
+                        help='Path to DHVT checkpoint (.pth or .safetensors)')
     parser.add_argument('--dhvt-model', type=str, default='dhvt_tiny_cifar_patch4',
                         choices=['dhvt_tiny_cifar_patch4', 'dhvt_small_cifar_patch4'])
     parser.add_argument('--data-path', type=str, default='../data/cifar-100')

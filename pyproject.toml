@@ -19,6 +19,7 @@ dependencies = [
     "tqdm>=4.67.3",
     "dotenv>=0.9.9",
     "matplotlib>=3.8",
+    "safetensors>=0.4",
 ]
 
 [tool.uv]
