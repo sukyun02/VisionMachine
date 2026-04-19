@@ -1,0 +1,44 @@
+# setup
+bash setup_server.sh
+
+# activate project venv before training/evaluation
+. venv/bin/activate
+
+# reduce CUDA memory fragmentation before starting Python
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# check GPU occupancy
+nvidia-smi
+
+# Phase 0: batch 256 smoke test with validation batch kept at 1x
+python train_server.py --seed 42 --epochs 1 --batch_size 256 --lr 0.2 --eval_interval 1 --val_batch_mult 1
+
+# Diagnose whether OOM is from training or eval/final-SWA path
+python train_server.py --seed 42 --epochs 1 --batch_size 256 --lr 0.2 --skip_eval
+
+# Phase 1: speed test with safe CUDA options
+python train_server.py --seed 42 --epochs 1 --batch_size 256 --lr 0.2 --eval_interval 1 --val_batch_mult 1 --fast_cudnn --channels_last
+
+# Fallback comparison if batch 256 still OOMs
+python train_server.py --seed 42 --epochs 1 --batch_size 128 --lr 0.1 --eval_interval 1 --val_batch_mult 1 --fast_cudnn --channels_last
+
+# Phase 2A: single seed training, batch 256 path
+nohup python train_server.py --seed 42 --epochs 1800 --batch_size 256 --lr 0.2 --num_workers 8 --eval_interval 20 --val_batch_mult 1 --fast_cudnn --channels_last > logs/seed42.log 2>&1 &
+
+# Phase 2B: fallback single seed training, batch 128 path
+nohup python train_server.py --seed 42 --epochs 1800 --batch_size 128 --lr 0.1 --num_workers 8 --eval_interval 20 --val_batch_mult 1 --fast_cudnn --channels_last > logs/seed42.log 2>&1 &
+
+# multi-seed training after final batch choice
+python run_seeds.py --epochs 1800 --batch_size 256 --lr 0.2 --num_workers 8 --eval_interval 20 --val_batch_mult 1 --fast_cudnn --channels_last
+
+# monitor
+tail -f logs/seed42.log
+# per-epoch performance CSV: checkpoints/perf_seed42.csv
+
+# evaluate
+python evaluate.py --ckpt checkpoints/best_seed42.pth
+python evaluate.py --ckpt checkpoints/swa_final_seed42.pth
+
+# process management
+ps aux | grep train_server.py
+kill [PID]
