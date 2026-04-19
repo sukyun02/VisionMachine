@@ -171,6 +171,8 @@ ensemble_log_probs = (
 ensemble_probs = F.softmax(ensemble_log_probs, dim=1)
 ```
 
+여기서 `F.softmax(w * log p1 + (1 - w) * log p2)`는 정규화된 가중 기하평균 `p1^w * p2^(1-w) / Z`와 같다. `softmax`는 class score를 다시 확률분포로 정규화하기 위해 필요하다.
+
 4. temperature scaling은 각 모델별 temperature를 validation set에서 fit한 뒤 적용한다. 최종 test set으로 temperature나 weight를 고르면 leaderboard/test leakage가 된다.
 5. rank-based fusion은 calibration 차이를 피하는 빠른 baseline으로 쓸 수 있지만, 확률 해석은 사라진다.
 
@@ -178,7 +180,7 @@ ensemble_probs = F.softmax(ensemble_log_probs, dim=1)
 
 ### DHVT EMA checkpoint 사용 여부
 
-`DHVT/main.py`는 checkpoint에 `model`과 `model_ema`를 모두 저장한다. 현재 `test/inference.py`의 `load_model`은 `model`을 먼저 읽고 `model_ema`는 고려하지 않는다. DHVT 학습에서 EMA 성능을 기대했다면 `--use-model-ema` 옵션을 추가해 비교하는 것이 좋다.
+`DHVT/main.py`는 checkpoint에 `model`과 `model_ema`를 모두 저장한다. 기존 `test/inference.py`의 `load_model`은 `model`을 먼저 읽고 `model_ema`는 고려하지 않았으므로, DHVT 학습에서 EMA 성능을 기대했다면 `--use-model-ema` 옵션 추가 구현이 필요했다. 수정본에서는 이 옵션을 추가해 `model_ema`가 있는 checkpoint를 비교할 수 있게 했다.
 
 권장 resolver는 한 줄 expression보다 명시적인 함수가 안전하다.
 
@@ -200,7 +202,7 @@ def resolve_state_dict(ckpt, prefer_ema=False):
 
 ### CPU 실행 시 autocast
 
-`collect_logits`와 DHVT TTA path는 `torch.amp.autocast('cuda')`를 고정 사용한다. 기본 실행은 CUDA라 큰 문제는 아니지만, `--device cpu`를 지원하려면 device type을 분기하는 편이 낫다.
+기존 `collect_logits`와 DHVT TTA path는 `torch.amp.autocast('cuda')`를 고정 사용했다. 기본 실행은 CUDA라 큰 문제는 아니지만, `--device cpu`를 지원하려면 device type을 분기하는 편이 낫다. 수정본에서는 `autocast_for(device)` 헬퍼로 CUDA일 때만 autocast를 켜도록 바꿨다.
 
 ## 수정된 우선순위
 
@@ -208,7 +210,7 @@ def resolve_state_dict(ckpt, prefer_ema=False):
 | --- | --- | --- | --- |
 | 1 | WRN normalization mismatch | WRN 단독과 ensemble 모두 직접 손상 | 반드시 수정 |
 | 2 | WRN TTA padding mode mismatch | WRN TTA view 품질 저하 | 반드시 수정 |
-| 3 | WRN/DHVT no-TTA dataset 공유 | WRN no-TTA 평가가 ImageNet normalization으로 왜곡 | 반드시 수정 |
+| 3 | WRN/DHVT no-TTA dataset 공유 | WRN no-TTA 평가가 ImageNet normalization으로 왜곡 | #1의 일부이나 별도 코드 경로라 반드시 수정 |
 | 4 | ensemble weight 미튜닝 | 약한 모델 또는 miscalibrated 모델이 ensemble을 낮출 수 있음 | normalization 수정 후 검토 |
 | 5 | 모델 간 calibration 차이 | probability average가 불안정할 수 있음 | validation 기반으로 검토 |
 | 6 | DHVT EMA 미사용 가능성 | DHVT 단독 성능 저하 가능성 | checkpoint 의도 확인 후 비교 |
@@ -228,6 +230,6 @@ def resolve_state_dict(ckpt, prefer_ema=False):
 
 1. WRN normalization과 WRN no-TTA dataset을 CIFAR-100 stats로 수정한다.
 2. WRN TTA padding을 reflect로 바꾸고, DHVT TTA는 constant padding을 유지한다.
-3. 같은 조건에서 WRN/DHVT 단독 성능을 다시 측정한다.
+3. `--wrn-checkpoint`만, `--dhvt-checkpoint`만 각각 돌려 베이스라인을 확정한 뒤 같은 조건에서 WRN/DHVT 단독 성능을 다시 측정한다.
 4. 그래도 ensemble이 WRN보다 낮으면 validation 기반으로 weight sweep, geometric mean, temperature scaling을 비교한다.
 5. DHVT checkpoint의 `model_ema` 사용 여부를 별도 실험으로 확인한다.

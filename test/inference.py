@@ -67,10 +67,15 @@ def get_tta_transforms(input_size=32, padding=4,
                 return transforms.functional.crop(padded, t, l, input_size, input_size)
             return crop_fn
 
-        tta_list.append((name, transforms.Compose([
-            transforms.Lambda(make_crop_fn(top, left)),
-            normalize,
-        ])))
+        crop = transforms.Lambda(make_crop_fn(top, left))
+        tta_list.append((name, transforms.Compose([crop, normalize])))
+
+        if include_flipped_corners:
+            tta_list.append((f"{name}_hflip", transforms.Compose([
+                crop,
+                transforms.RandomHorizontalFlip(p=1.0),
+                normalize,
+            ])))
 
     return tta_list
 
@@ -165,6 +170,22 @@ def apply_fusion(fine_logits, coarse_logits, fine_to_coarse_t, beta):
     log_p_coarse = F.log_softmax(coarse_logits, dim=1)
     log_p_coarse_broadcast = log_p_coarse[:, fine_to_coarse_t]  # (N, 100)
     return log_p_fine + beta * log_p_coarse_broadcast
+
+
+def combine_model_probs(wrn_probs, dhvt_probs, wrn_weight, method):
+    """Combine model probabilities with arithmetic or geometric fusion."""
+    if method == 'prob':
+        return wrn_weight * wrn_probs + (1 - wrn_weight) * dhvt_probs
+
+    if method == 'geom':
+        eps = 1e-12
+        log_probs = (
+            wrn_weight * torch.log(wrn_probs.clamp_min(eps))
+            + (1 - wrn_weight) * torch.log(dhvt_probs.clamp_min(eps))
+        )
+        return F.softmax(log_probs, dim=1)
+
+    raise ValueError(f"Unknown ensemble method: {method}")
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +286,9 @@ def main():
     parser.add_argument('--num-superclasses', type=int, default=20)
     parser.add_argument('--wrn-weight', type=float, default=0.6,
                         help='Weight for WRN in ensemble (DHVT gets 1 - this)')
+    parser.add_argument('--ensemble-method', type=str, default='prob',
+                        choices=['prob', 'geom'],
+                        help='prob=weighted arithmetic mean, geom=normalized weighted geometric mean')
     parser.add_argument('--fusion-beta', type=float, default=0.5,
                         help='Hierarchical score fusion weight for DHVT aux head. '
                              '0=disabled. Recommended: 0.3 (balanced) ~ 1.0 (SC_Density focus). '
@@ -357,10 +381,13 @@ def main():
     # --- Ensemble ---
     if len(model_probs) == 2:
         w = args.wrn_weight
-        ensemble_probs = w * model_probs['wrn'] + (1 - w) * model_probs['dhvt']
+        ensemble_probs = combine_model_probs(
+            model_probs['wrn'], model_probs['dhvt'], w, args.ensemble_method)
         acc1, acc5, sc = compute_metrics(ensemble_probs, targets, fine_to_coarse_t)
         print(f"\n{'='*50}")
-        print_results(f"Ensemble (WRN={w:.1f}, DHVT={1-w:.1f}) + TTA", acc1, acc5, sc)
+        print_results(
+            f"Ensemble ({args.ensemble_method}, WRN={w:.1f}, DHVT={1-w:.1f}) + TTA",
+            acc1, acc5, sc)
         print(f"{'='*50}")
     elif len(model_probs) == 1:
         name = list(model_probs.keys())[0]
