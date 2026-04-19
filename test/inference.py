@@ -245,9 +245,9 @@ def main():
     parser.add_argument('--batch-size', type=int, default=256)
     parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--num-superclasses', type=int, default=20)
-    parser.add_argument('--wrn-weight', type=float, default=0.6,
+    parser.add_argument('--wrn-weight', type=float, default=0.85,
                         help='Weight for WRN in ensemble (DHVT gets 1 - this)')
-    parser.add_argument('--fusion-beta', type=float, default=0.1,
+    parser.add_argument('--fusion-beta', type=float, default=1.0,
                         help='Hierarchical score fusion weight for DHVT aux head. '
                              '0=disabled. Recommended: 0.3 (balanced) ~ 1.0 (SC_Density focus). '
                              'score(c) = log p_fine(c) + beta * log p_coarse(sc(c))')
