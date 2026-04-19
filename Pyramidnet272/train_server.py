@@ -15,6 +15,7 @@ import random
 import time
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import matplotlib
 matplotlib.use("Agg")
@@ -605,14 +606,16 @@ def main(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Train PyramidNet-272 on CIFAR-100 (server, no wandb)")
+        description="Train PyramidNet-272 on CIFAR-100 (server, no wandb)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--epochs", type=int, default=1800)
-    parser.add_argument("--batch_size", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=0.1)
+    parser.add_argument("--epochs", type=int, default=240)
+    parser.add_argument("--batch_size", type=int, default=160)
+    parser.add_argument("--lr", type=float, default=0.125)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
-    parser.add_argument("--swa_start_ratio", type=float, default=0.85)
-    parser.add_argument("--swa_lr", type=float, default=0.0)
+    parser.add_argument("--swa_start_ratio", type=float, default=0.75)
+    parser.add_argument("--swa_lr", type=float, default=0.0125)
     parser.add_argument("--lam_coarse", type=float, default=0.4)
     parser.add_argument("--epsilon", type=float, default=0.1)
     parser.add_argument("--intra_ratio", type=float, default=0.5)
@@ -625,7 +628,8 @@ def parse_args():
     parser.add_argument("--prefetch_factor", type=int, default=2)
     parser.add_argument("--eval_interval", type=int, default=20)
     parser.add_argument("--plot_interval", type=int, default=100)
-    parser.add_argument("--fast_cudnn", action="store_true", default=False)
+    parser.add_argument("--fast_cudnn", action=argparse.BooleanOptionalAction,
+                        default=True)
     parser.add_argument("--channels_last", action="store_true", default=False)
     parser.add_argument("--skip_eval", action="store_true", default=False)
     return parser.parse_args()
